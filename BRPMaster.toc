@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: |cff9664c8BRP Master
+## Notes: Beluga Raid Points — unified loot window + EP/GP management
+## Author: Eggorkus
+## Version: 1.0
+## SavedVariables: BRPMasterDB
+
+BRPMaster.lua
