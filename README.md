@@ -1,6 +1,9 @@
 # BRPMaster
 
-> WoW 1.12 (Turtle WoW) addon for EP/GP DKP loot management
+> Разработано для гильдии **BELUGA** — Nordanaar, Turtle WoW
+> Developed for guild **BELUGA** — Nordanaar, Turtle WoW
+
+**Автор / Author:** Eggorkus
 
 ---
 
