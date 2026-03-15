@@ -1199,6 +1199,8 @@ evFrame:SetScript("OnEvent", function()
     -- Build UI
     mlFrame        = CreateMLFrame()
     playerMgrFrame = CreatePlayerMgrFrame()
+    tinsert(UISpecialFrames, "BRPMasterMLFrame")
+    tinsert(UISpecialFrames, "BRPMasterPMGRFrame")
     CreateMinimapButton()
     -- Refresh cache after UI is built
     GuildRoster()
