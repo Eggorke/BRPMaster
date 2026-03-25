@@ -124,21 +124,38 @@ local function WriteNote(oldNote, newEp, newGp)
 end
 
 -- ── Guild cache ─────────────────────────────────────────────────────────────
-local function BuildCache()
-  cache = {}
-  local n = GetNumGuildMembers()
-  if not n then return end
-  for i = 1, n do
-    local name, rank, rIdx, _, class, _, _, note = GetGuildRosterInfo(i)
-    if name then
-      local ep, gp = ParseNote(note)
-      cache[name] = {
-        ep=ep or 0, gp=gp or 0, gIdx=i,
-        note=note or "", rank=rank or "",
-        rankIdx=rIdx or 99, class=class or "",
-      }
+local function BuildCache(includeOffline)
+  if includeOffline and
+     type(GetGuildRosterShowOffline) == "function" and
+     type(SetGuildRosterShowOffline) == "function" then
+    if not GetGuildRosterShowOffline() then
+      SetGuildRosterShowOffline(1)
+      -- Force roster APIs to use the full guild list even if the Guild UI hides offline members.
+      GetGuildRosterInfo(0)
     end
   end
+
+  cache = {}
+  local n
+  if includeOffline then
+    n = GetNumGuildMembers(1) or GetNumGuildMembers()
+  else
+    n = GetNumGuildMembers()
+  end
+  if n then
+    for i = 1, n do
+      local name, rank, rIdx, _, class, _, _, note = GetGuildRosterInfo(i)
+      if name then
+        local ep, gp = ParseNote(note)
+        cache[name] = {
+          ep=ep or 0, gp=gp or 0, gIdx=i,
+          note=note or "", rank=rank or "",
+          rankIdx=rIdx or 99, class=class or "",
+        }
+      end
+    end
+  end
+
 end
 
 -- ── EPGP modification ───────────────────────────────────────────────────────
@@ -187,6 +204,7 @@ end
 
 local function DecayAll(factor)
   -- factor = fraction to KEEP, e.g. 0.8 = 20% decay
+  BuildCache(true)
   local count = 0
   for name, m in pairs(cache) do
     if m.ep > 0 or m.gp > 0 then
