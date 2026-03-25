@@ -21,6 +21,7 @@ local TABLE_EP_NAME = "NAXX"   -- rename here to change all EP/NAXX labels
 local TABLE_GP_NAME = "KARA"   -- rename here to change all GP/KARA labels
 
 local MIN_BID    = 10
+local MAX_LOG_ENTRIES = 2000
 local MAX_ROWS   = 10
 local ROW_H      = 22
 local HEADER_H   = 90    -- item icon + name area
@@ -60,6 +61,7 @@ local st = {
   -- settings
   announceChannel = "RAID_WARNING",
   defaultDecay    = 20,
+  nextLogId       = 1,
   -- pending ML request (delayed)
   pendReq     = false,
   reqDelay    = 0,
@@ -71,6 +73,13 @@ local st = {
 -- Guild cache: rebuilt on GUILD_ROSTER_UPDATE
 -- [name] = { ep, gp, gIdx, note, rank, rankIdx, class }
 local cache = {}
+local logViewerFrame
+local logExportFrame
+local UpdateLogRows
+
+local function TableDisplayName(tableKey)
+  return (tableKey == "EP") and TABLE_EP_NAME or TABLE_GP_NAME
+end
 
 -- ── Utility ─────────────────────────────────────────────────────────────────
 local function Pr(msg)
@@ -109,6 +118,118 @@ end
 
 local function IsNumber(s) return tonumber(s) ~= nil end
 
+local function EnsureDB()
+  BRPMasterDB = BRPMasterDB or {}
+  BRPMasterDB.logs = BRPMasterDB.logs or {}
+  BRPMasterDB.logMeta = BRPMasterDB.logMeta or {}
+  if not BRPMasterDB.logMeta.nextId or BRPMasterDB.logMeta.nextId < 1 then
+    BRPMasterDB.logMeta.nextId = 1
+  end
+  if not BRPMasterDB.logMeta.maxEntries or BRPMasterDB.logMeta.maxEntries < 50 then
+    BRPMasterDB.logMeta.maxEntries = MAX_LOG_ENTRIES
+  end
+  st.nextLogId = BRPMasterDB.logMeta.nextId
+end
+
+local function TrimLogs()
+  local logs = BRPMasterDB.logs
+  local maxEntries = BRPMasterDB.logMeta.maxEntries or MAX_LOG_ENTRIES
+  while table.getn(logs) > maxEntries do
+    table.remove(logs, 1)
+  end
+end
+
+local function NextLogId()
+  local id = st.nextLogId or 1
+  st.nextLogId = id + 1
+  BRPMasterDB.logMeta.nextId = st.nextLogId
+  return id
+end
+
+local function NewBatchId(prefix)
+  return string.format("%s_%d_%d", prefix or "batch", time(), math.random(1000, 9999))
+end
+
+local function AddLogEntry(entry)
+  EnsureDB()
+  entry.id = entry.id or NextLogId()
+  entry.ts = entry.ts or time()
+  entry.dateText = entry.dateText or date("%Y-%m-%d %H:%M:%S", entry.ts)
+  table.insert(BRPMasterDB.logs, entry)
+  TrimLogs()
+  if logViewerFrame and logViewerFrame:IsVisible() and UpdateLogRows then
+    UpdateLogRows()
+  end
+end
+
+local function GetLogEntries()
+  EnsureDB()
+  return BRPMasterDB.logs
+end
+
+local function EscapeForJson(s)
+  s = tostring(s or "")
+  s = string.gsub(s, "\\", "\\\\")
+  s = string.gsub(s, "\"", "\\\"")
+  s = string.gsub(s, "\r", "\\r")
+  s = string.gsub(s, "\n", "\\n")
+  return s
+end
+
+local function SerializeLogValue(v)
+  local t = type(v)
+  if t == "nil" then return "null" end
+  if t == "number" then return tostring(v) end
+  if t == "boolean" then return v and "true" or "false" end
+  return "\"" .. EscapeForJson(v) .. "\""
+end
+
+local function SerializeMeta(meta)
+  if type(meta) ~= "table" then return "{}" end
+  local parts = {}
+  for k, v in pairs(meta) do
+    table.insert(parts, string.format("\"%s\":%s", EscapeForJson(k), SerializeLogValue(v)))
+  end
+  return "{"..table.concat(parts, ",").."}"
+end
+
+local function ExportLogsAsJson()
+  local logs = GetLogEntries()
+  local lines = {"["}
+  for i = 1, table.getn(logs) do
+    local e = logs[i]
+    local row = {
+      string.format("\"id\":%d", e.id or 0),
+      string.format("\"ts\":%d", e.ts or 0),
+      string.format("\"dateText\":%s", SerializeLogValue(e.dateText)),
+      string.format("\"kind\":%s", SerializeLogValue(e.kind)),
+      string.format("\"actor\":%s", SerializeLogValue(e.actor)),
+      string.format("\"target\":%s", SerializeLogValue(e.target)),
+      string.format("\"scope\":%s", SerializeLogValue(e.scope)),
+      string.format("\"batchId\":%s", SerializeLogValue(e.batchId)),
+      string.format("\"reason\":%s", SerializeLogValue(e.reason)),
+      string.format("\"tableKey\":%s", SerializeLogValue(e.tableKey)),
+      string.format("\"tableName\":%s", SerializeLogValue(e.tableName)),
+      string.format("\"delta\":%s", SerializeLogValue(e.delta)),
+      string.format("\"before\":%s", SerializeLogValue(e.before)),
+      string.format("\"after\":%s", SerializeLogValue(e.after)),
+      string.format("\"beforeEP\":%s", SerializeLogValue(e.beforeEP)),
+      string.format("\"afterEP\":%s", SerializeLogValue(e.afterEP)),
+      string.format("\"deltaEP\":%s", SerializeLogValue(e.deltaEP)),
+      string.format("\"beforeGP\":%s", SerializeLogValue(e.beforeGP)),
+      string.format("\"afterGP\":%s", SerializeLogValue(e.afterGP)),
+      string.format("\"deltaGP\":%s", SerializeLogValue(e.deltaGP)),
+      string.format("\"itemLink\":%s", SerializeLogValue(e.itemLink)),
+      string.format("\"itemName\":%s", SerializeLogValue(e.itemName)),
+      string.format("\"meta\":%s", SerializeMeta(e.meta)),
+    }
+    local suffix = (i < table.getn(logs)) and "," or ""
+    table.insert(lines, "  {"..table.concat(row, ",").."}"..suffix)
+  end
+  table.insert(lines, "]")
+  return table.concat(lines, "\n")
+end
+
 -- ── EPGP — note I/O ─────────────────────────────────────────────────────────
 local function ParseNote(note)
   if not note or note == "" then return nil, nil end
@@ -121,6 +242,13 @@ local function WriteNote(oldNote, newEp, newGp)
   local result, n = string.gsub(oldNote or "", "{%d+:%d+}", patch)
   if n == 0 then result = (oldNote or "") .. patch end
   return result
+end
+
+local function SaveMemberState(m, newEp, newGp)
+  m.ep = math.max(0, newEp)
+  m.gp = math.max(0, newGp)
+  m.note = WriteNote(m.note, m.ep, m.gp)
+  GuildRosterSetOfficerNote(m.gIdx, m.note)
 end
 
 -- ── Guild cache ─────────────────────────────────────────────────────────────
@@ -159,41 +287,85 @@ local function BuildCache(includeOffline)
 end
 
 -- ── EPGP modification ───────────────────────────────────────────────────────
-local function DeductDKP(name, amount)
+local function ApplyDKPChange(name, tableKey, delta, context)
   local m = cache[name]
-  if not m then Pr("Cannot find "..name.." in guild."); return false end
-  if st.activeTable == "EP" then
-    m.ep = math.max(0, m.ep - amount)
-  else
-    m.gp = math.max(0, m.gp - amount)
+  if not m then
+    Pr("Not found: "..name)
+    return nil
   end
-  m.note = WriteNote(m.note, m.ep, m.gp)
-  GuildRosterSetOfficerNote(m.gIdx, m.note)
+  local before = (tableKey == "EP") and m.ep or m.gp
+  local newEp, newGp = m.ep, m.gp
+  if tableKey == "EP" then
+    newEp = math.max(0, before + delta)
+  else
+    newGp = math.max(0, before + delta)
+  end
+  SaveMemberState(m, newEp, newGp)
+  local after = (tableKey == "EP") and newEp or newGp
+  AddLogEntry({
+    kind = (context and context.kind) or "player_adjust",
+    actor = (context and context.actor) or UnitName("player"),
+    target = name,
+    scope = (context and context.scope) or "single",
+    batchId = context and context.batchId or nil,
+    reason = context and context.reason or nil,
+    tableKey = tableKey,
+    tableName = TableDisplayName(tableKey),
+    delta = after - before,
+    before = before,
+    after = after,
+    itemLink = context and context.itemLink or nil,
+    itemName = context and context.itemName or nil,
+    meta = context and context.meta or nil,
+  })
+  return { before = before, after = after, delta = after - before, class = m.class }
+end
+
+local function ApplyDecayToPlayer(name, factor, batchId, pct)
+  local m = cache[name]
+  if not m then return nil end
+  local beforeEp, beforeGp = m.ep, m.gp
+  local newEp = math.max(0, math.floor(beforeEp * factor + 0.5))
+  local newGp = math.max(0, math.floor(beforeGp * factor + 0.5))
+  if newEp < 5 then newEp = 0 end
+  if newGp < 5 then newGp = 0 end
+  if newEp == beforeEp and newGp == beforeGp then
+    return nil
+  end
+  SaveMemberState(m, newEp, newGp)
+  AddLogEntry({
+    kind = "decay",
+    actor = UnitName("player"),
+    target = name,
+    scope = "guild",
+    batchId = batchId,
+    reason = "Guild decay",
+    beforeEP = beforeEp,
+    afterEP = newEp,
+    deltaEP = newEp - beforeEp,
+    beforeGP = beforeGp,
+    afterGP = newGp,
+    deltaGP = newGp - beforeGp,
+    meta = { decayPct = pct },
+  })
   return true
 end
 
-local function ModifyEP(name, delta)
-  local m = cache[name]; if not m then Pr("Not found: "..name); return end
-  m.ep = math.max(0, m.ep + delta)
-  m.note = WriteNote(m.note, m.ep, m.gp)
-  GuildRosterSetOfficerNote(m.gIdx, m.note)
-end
-
-local function ModifyGP(name, delta)
-  local m = cache[name]; if not m then Pr("Not found: "..name); return end
-  m.gp = math.max(0, m.gp + delta)
-  m.note = WriteNote(m.note, m.ep, m.gp)
-  GuildRosterSetOfficerNote(m.gIdx, m.note)
-end
-
 local function AwardRaidEP(amount, whichTable)
+  local batchId = NewBatchId("raid")
   local count = 0
   for i = 1, GetNumRaidMembers() do
     local name = GetRaidRosterInfo(i)
     if name and cache[name] then
-      if whichTable == "EP" then ModifyEP(name, amount)
-      else ModifyGP(name, amount) end
-      count = count + 1
+      if ApplyDKPChange(name, whichTable, amount, {
+        kind = "raid_award",
+        scope = "raid",
+        batchId = batchId,
+        reason = "Raid award",
+        meta = { raidCount = GetNumRaidMembers() },
+      }) then
+        count = count + 1
+      end
     end
   end
   local tName = (whichTable == "EP") and TABLE_EP_NAME or TABLE_GP_NAME
@@ -205,23 +377,16 @@ end
 local function DecayAll(factor)
   -- factor = fraction to KEEP, e.g. 0.8 = 20% decay
   BuildCache(true)
+  local pct = math.floor((1 - factor) * 100 + 0.5)
+  local batchId = NewBatchId("decay")
   local count = 0
   for name, m in pairs(cache) do
     if m.ep > 0 or m.gp > 0 then
-      local newEp = math.max(0, math.floor(m.ep * factor + 0.5))
-      local newGp = math.max(0, math.floor(m.gp * factor + 0.5))
-      -- Values below 5 after decay are eliminated to 0
-      if newEp < 5 then newEp = 0 end
-      if newGp < 5 then newGp = 0 end
-      local newNote = WriteNote(m.note, newEp, newGp)
-      GuildRosterSetOfficerNote(m.gIdx, newNote)
-      m.ep   = newEp
-      m.gp   = newGp
-      m.note = newNote
-      count  = count + 1
+      if ApplyDecayToPlayer(name, factor, batchId, pct) then
+        count = count + 1
+      end
     end
   end
-  local pct = math.floor((1 - factor) * 100 + 0.5)
   Pr(string.format("Decay %d pct applied to %d members.", pct, count))
   SendChatMessage(string.format("[BRP] %d pct DKP decay applied to all members.", pct), "GUILD")
 end
@@ -293,7 +458,15 @@ end
 
 -- ── Award ────────────────────────────────────────────────────────────────────
 local function DoAward(winnerName, cost)
-  if not DeductDKP(winnerName, cost) then return end
+  local tableKey = st.activeTable
+  local result = ApplyDKPChange(winnerName, tableKey, -cost, {
+    kind = "loot",
+    scope = "single",
+    reason = "Loot award",
+    itemLink = st.itemFull or st.item,
+    itemName = st.itemName,
+  })
+  if not result then return end
   local tName = (st.activeTable == "EP") and TABLE_EP_NAME or TABLE_GP_NAME
   local iDisplay = st.itemFull or ("["..(st.itemName or "item").."]")
   local msg = string.format("%s wins %s for %d %s DKP",
@@ -390,8 +563,9 @@ StaticPopupDialogs["BRP_EP_PLAYER"] = {
     local _, _, name, amt = string.find(txt, "^(%S+)%s+(-?%d+)$")
     if name and amt then
       name = string.upper(string.sub(name,1,1))..string.sub(name,2)
-      ModifyEP(name, tonumber(amt))
-      Pr(name.." "..TABLE_EP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      if ApplyDKPChange(name, "EP", tonumber(amt), { reason = "Manual popup adjust" }) then
+        Pr(name.." "..TABLE_EP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      end
     else
       Pr("Format: Name Amount  (e.g. Eggorkus 100)")
     end
@@ -401,8 +575,9 @@ StaticPopupDialogs["BRP_EP_PLAYER"] = {
     local _, _, name, amt = string.find(txt, "^(%S+)%s+(-?%d+)$")
     if name and amt then
       name = string.upper(string.sub(name,1,1))..string.sub(name,2)
-      ModifyEP(name, tonumber(amt))
-      Pr(name.." "..TABLE_EP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      if ApplyDKPChange(name, "EP", tonumber(amt), { reason = "Manual popup adjust" }) then
+        Pr(name.." "..TABLE_EP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      end
     else
       Pr("Format: Name Amount  (e.g. Eggorkus 100)")
     end
@@ -420,8 +595,9 @@ StaticPopupDialogs["BRP_GP_PLAYER"] = {
     local _, _, name, amt = string.find(txt, "^(%S+)%s+(-?%d+)$")
     if name and amt then
       name = string.upper(string.sub(name,1,1))..string.sub(name,2)
-      ModifyGP(name, tonumber(amt))
-      Pr(name.." "..TABLE_GP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      if ApplyDKPChange(name, "GP", tonumber(amt), { reason = "Manual popup adjust" }) then
+        Pr(name.." "..TABLE_GP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      end
     else
       Pr("Format: Name Amount  (e.g. Eggorkus 100)")
     end
@@ -431,8 +607,9 @@ StaticPopupDialogs["BRP_GP_PLAYER"] = {
     local _, _, name, amt = string.find(txt, "^(%S+)%s+(-?%d+)$")
     if name and amt then
       name = string.upper(string.sub(name,1,1))..string.sub(name,2)
-      ModifyGP(name, tonumber(amt))
-      Pr(name.." "..TABLE_GP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      if ApplyDKPChange(name, "GP", tonumber(amt), { reason = "Manual popup adjust" }) then
+        Pr(name.." "..TABLE_GP_NAME.." DKP "..(tonumber(amt) >= 0 and "+" or "")..amt)
+      end
     else
       Pr("Format: Name Amount  (e.g. Eggorkus 100)")
     end
@@ -803,7 +980,7 @@ local PMGR_ROW_H    = 22
 local PMGR_MAX_ROWS = 14
 local PMGR_HDR_H    = 56
 local PMGR_COLHDR_H = 20
-local PMGR_FOOTER_H = 96
+local PMGR_FOOTER_H = 122
 local PMGR_H = PMGR_HDR_H + PMGR_COLHDR_H + (PMGR_MAX_ROWS * PMGR_ROW_H) + PMGR_FOOTER_H
 
 local function BuildPMGRList()
@@ -1073,11 +1250,12 @@ local function CreatePlayerMgrFrame()
     if amt == 0 then Pr("Amount is 0."); return end
     local tName = isEP and TABLE_EP_NAME or TABLE_GP_NAME
     local sign_s = amt >= 0 and "+" or ""
-    if isEP then ModifyEP(pmgrSelectedName, amt)
-    else         ModifyGP(pmgrSelectedName, amt) end
-    Pr(pmgrSelectedName.." "..tName.." "..sign_s..amt)
-    Announce(string.format("[BRP] %s %s DKP %s%d", pmgrSelectedName, tName, sign_s, amt))
-    UpdatePMGRRows()
+    local tableKey = isEP and "EP" or "GP"
+    if ApplyDKPChange(pmgrSelectedName, tableKey, amt, { reason = "Manager adjust" }) then
+      Pr(pmgrSelectedName.." "..tName.." "..sign_s..amt)
+      Announce(string.format("[BRP] %s %s DKP %s%d", pmgrSelectedName, tName, sign_s, amt))
+      UpdatePMGRRows()
+    end
   end
 
   -- Row 3: +/- buttons
@@ -1102,11 +1280,366 @@ local function CreatePlayerMgrFrame()
   b4:GetFontString():SetTextColor(1, 0.65, 0.1, 1)
   b4:SetScript("OnClick", function() ApplyDKP(false, -1) end)
 
+  local logBtn = MakeBtn(f, "Logs", 76, 20)
+  logBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 10)
+  logBtn:SetScript("OnClick", function()
+    if logViewerFrame then
+      if logViewerFrame:IsVisible() then logViewerFrame:Hide()
+      else
+        if UpdateLogRows then UpdateLogRows() end
+        logViewerFrame:Show()
+      end
+    end
+  end)
+
   f:Hide()
   return f
 end
 
 -- ── Item display ──────────────────────────────────────────────────────────────
+-- Log viewer
+local logRows = {}
+local logScrollOffset = 0
+local logSelectedIndex = nil
+local logDetailText
+local logScrollUp
+local logScrollDown
+local exportEditBox
+
+local LOG_W = 760
+local LOG_H = 420
+local LOG_ROW_H = 22
+local LOG_MAX_ROWS = 10
+
+local function GetLogEntrySummary(entry)
+  if entry.kind == "decay" then
+    return string.format("Decay  %s %d>%d  %s %d>%d",
+      TABLE_EP_NAME, entry.beforeEP or 0, entry.afterEP or 0,
+      TABLE_GP_NAME, entry.beforeGP or 0, entry.afterGP or 0)
+  end
+  local tName = entry.tableName or TableDisplayName(entry.tableKey)
+  return string.format("%s %d>%d (%+d)", tName, entry.before or 0, entry.after or 0, entry.delta or 0)
+end
+
+local function GetLogEntryTypeLabel(entry)
+  if entry.kind == "raid_award" then return "RAID" end
+  if entry.kind == "player_adjust" then return "MANUAL" end
+  if entry.kind == "loot" then return "LOOT" end
+  if entry.kind == "decay" then return "DECAY" end
+  return string.upper(entry.kind or "LOG")
+end
+
+local function BuildLogDetail(entry)
+  if not entry then
+    return "|cFF888888Select a log entry to inspect details.|r"
+  end
+  local lines = {}
+  table.insert(lines, string.format("|cFFFFD100%s|r  %s", GetLogEntryTypeLabel(entry), entry.dateText or "-"))
+  table.insert(lines, "Player: "..(entry.target or "-"))
+  table.insert(lines, "Actor: "..(entry.actor or "-"))
+  if entry.kind == "decay" then
+    table.insert(lines, string.format("%s: %d -> %d (%+d)", TABLE_EP_NAME, entry.beforeEP or 0, entry.afterEP or 0, entry.deltaEP or 0))
+    table.insert(lines, string.format("%s: %d -> %d (%+d)", TABLE_GP_NAME, entry.beforeGP or 0, entry.afterGP or 0, entry.deltaGP or 0))
+  else
+    table.insert(lines, string.format("Table: %s", entry.tableName or "-"))
+    table.insert(lines, string.format("Change: %d -> %d (%+d)", entry.before or 0, entry.after or 0, entry.delta or 0))
+  end
+  if entry.reason then table.insert(lines, "Reason: "..entry.reason) end
+  if entry.meta and entry.meta.decayPct then table.insert(lines, "Decay: "..entry.meta.decayPct.."%") end
+  if entry.itemName then
+    table.insert(lines, "Item: "..entry.itemName)
+  elseif entry.itemLink then
+    table.insert(lines, "Item: "..entry.itemLink)
+  end
+  if entry.batchId then table.insert(lines, "Batch: "..entry.batchId) end
+  return table.concat(lines, "\n")
+end
+
+UpdateLogRows = function()
+  if not logViewerFrame then return end
+  local logs = GetLogEntries()
+  local total = table.getn(logs)
+  local maxScroll = math.max(0, total - LOG_MAX_ROWS)
+  if logScrollOffset > maxScroll then logScrollOffset = maxScroll end
+  if logScrollOffset < 0 then logScrollOffset = 0 end
+
+  for i = 1, LOG_MAX_ROWS do
+    local row = logRows[i]
+    local dataIndex = total - (logScrollOffset + i) + 1
+    local entry = logs[dataIndex]
+    if entry then
+      row._index = dataIndex
+      row.timeText:SetText(entry.dateText or "")
+      row.typeText:SetText(GetLogEntryTypeLabel(entry))
+      row.targetText:SetText(entry.target or "-")
+      row.changeText:SetText(GetLogEntrySummary(entry))
+      if dataIndex == logSelectedIndex then
+        row.bg:SetTexture(0.25, 0.20, 0.04, 0.9)
+      elseif math.mod(i, 2) == 0 then
+        row.bg:SetTexture(0.08, 0.08, 0.08, 0.5)
+      else
+        row.bg:SetTexture(0, 0, 0, 0)
+      end
+      row:Show()
+    else
+      row._index = nil
+      row:Hide()
+    end
+  end
+
+  if logDetailText then
+    logDetailText:SetText(BuildLogDetail(logs[logSelectedIndex]))
+  end
+  if logScrollUp then
+    if logScrollOffset > 0 then logScrollUp:Enable() else logScrollUp:Disable() end
+  end
+  if logScrollDown then
+    if logScrollOffset < maxScroll then logScrollDown:Enable() else logScrollDown:Disable() end
+  end
+end
+
+local function ShowExportWindow()
+  if not logExportFrame or not exportEditBox then return end
+  exportEditBox:SetText(ExportLogsAsJson())
+  logExportFrame:Show()
+  exportEditBox:SetFocus()
+  exportEditBox:HighlightText()
+end
+
+local function CreateLogExportFrame()
+  local f = CreateFrame("Frame", "BRPMasterLogExportFrame", UIParent)
+  f:SetWidth(680)
+  f:SetHeight(440)
+  f:SetPoint("CENTER", UIParent, "CENTER", 60, 0)
+  f:SetFrameStrata("DIALOG")
+  MakeBackdrop(f, 0, 0, 0, 0.95)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function() f:StartMoving() end)
+  f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+  MakeCloseBtn(f, nil)
+
+  local title = f:CreateFontString(nil, "OVERLAY")
+  title:SetFont(FONT, 13, "OUTLINE")
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -8)
+  title:SetTextColor(1, 0.84, 0, 1)
+  title:SetText("DKP Log Export")
+
+  local hint = f:CreateFontString(nil, "OVERLAY")
+  hint:SetFont(FONT, FS, "")
+  hint:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -28)
+  hint:SetWidth(620)
+  hint:SetJustifyH("LEFT")
+  hint:SetText("|cFFAAAAAAExport all current log entries for later upload.|r")
+
+  local scroll = CreateFrame("ScrollFrame", "BRPMasterLogExportScroll", f, "UIPanelScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -48)
+  scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -28, 40)
+
+  local eb = CreateFrame("EditBox", "BRPMasterLogExportEditBox", scroll)
+  eb:SetFont(FONT_MONO, FS, "")
+  eb:SetWidth(620)
+  eb:SetHeight(4000)
+  eb:SetMultiLine(true)
+  eb:SetAutoFocus(false)
+  eb:SetJustifyH("LEFT")
+  eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
+  eb:SetScript("OnTextChanged", function() scroll:UpdateScrollChildRect() end)
+  scroll:SetScrollChild(eb)
+  exportEditBox = eb
+
+  local refreshBtn = MakeBtn(f, "Refresh", 80, 20)
+  refreshBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 10)
+  refreshBtn:SetScript("OnClick", function()
+    exportEditBox:SetText(ExportLogsAsJson())
+    exportEditBox:SetFocus()
+    exportEditBox:HighlightText()
+  end)
+
+  f:Hide()
+  return f
+end
+
+StaticPopupDialogs["BRP_CONFIRM_CLEAR_LOGS"] = {
+  text = "Delete all DKP log entries?",
+  button1 = "Clear",
+  button2 = "Cancel",
+  OnAccept = function()
+    EnsureDB()
+    BRPMasterDB.logs = {}
+    logSelectedIndex = nil
+    if logExportFrame and logExportFrame:IsVisible() and exportEditBox then
+      exportEditBox:SetText("")
+    end
+    if UpdateLogRows then UpdateLogRows() end
+    Pr("DKP log cleared.")
+  end,
+  timeout = 0,
+  whileDead = true,
+  hideOnEscape = true,
+  preferredIndex = 3,
+}
+
+local function CreateLogViewerFrame()
+  local f = CreateFrame("Frame", "BRPMasterLogViewerFrame", UIParent)
+  f:SetWidth(LOG_W)
+  f:SetHeight(LOG_H)
+  f:SetPoint("CENTER", UIParent, "CENTER", 120, 0)
+  f:SetFrameStrata("DIALOG")
+  MakeBackdrop(f, 0, 0, 0, 0.94)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:EnableMouseWheel(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function() f:StartMoving() end)
+  f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+  f:SetScript("OnMouseWheel", function()
+    if arg1 > 0 then logScrollOffset = logScrollOffset - 1
+    else              logScrollOffset = logScrollOffset + 1 end
+    UpdateLogRows()
+  end)
+  MakeCloseBtn(f, nil)
+
+  local title = f:CreateFontString(nil, "OVERLAY")
+  title:SetFont(FONT, 13, "OUTLINE")
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -8)
+  title:SetTextColor(1, 0.84, 0, 1)
+  title:SetText("DKP Log")
+
+  local countText = f:CreateFontString(nil, "OVERLAY")
+  countText:SetFont(FONT, FS, "")
+  countText:SetPoint("TOPRIGHT", f, "TOPRIGHT", -120, -10)
+  countText:SetTextColor(0.8, 0.8, 0.8, 1)
+
+  local function RefreshCount()
+    countText:SetText("Entries: "..table.getn(GetLogEntries()))
+  end
+
+  local headers = {
+    {"Time", 10, 142},
+    {"Type", 156, 78},
+    {"Player", 238, 130},
+    {"Change", 372, 324},
+  }
+  for i = 1, table.getn(headers) do
+    local h = headers[i]
+    local fs = f:CreateFontString(nil, "OVERLAY")
+    fs:SetFont(FONT, FS, "OUTLINE")
+    fs:SetTextColor(0.9, 0.75, 0.1, 1)
+    fs:SetPoint("TOPLEFT", f, "TOPLEFT", h[2], -34)
+    fs:SetWidth(h[3])
+    fs:SetJustifyH("LEFT")
+    fs:SetText(h[1])
+  end
+
+  local sep = f:CreateTexture(nil, "ARTWORK")
+  sep:SetHeight(1)
+  sep:SetWidth(LOG_W - 20)
+  sep:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -52)
+  sep:SetTexture(0.5, 0.42, 0.1, 0.8)
+
+  for i = 1, LOG_MAX_ROWS do
+    local row = CreateFrame("Button", nil, f)
+    row:SetWidth(LOG_W - 38)
+    row:SetHeight(LOG_ROW_H)
+    row:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -(56 + (i-1) * LOG_ROW_H))
+    row:RegisterForClicks("LeftButtonUp")
+
+    local bg = row:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(row)
+    if math.mod(i, 2) == 0 then bg:SetTexture(0.08, 0.08, 0.08, 0.5)
+    else                        bg:SetTexture(0, 0, 0, 0) end
+    row.bg = bg
+
+    row.timeText = row:CreateFontString(nil, "OVERLAY")
+    row.timeText:SetFont(FONT, FS, "")
+    row.timeText:SetWidth(142)
+    row.timeText:SetPoint("LEFT", row, "LEFT", 0, 0)
+    row.timeText:SetJustifyH("LEFT")
+
+    row.typeText = row:CreateFontString(nil, "OVERLAY")
+    row.typeText:SetFont(FONT, FS, "")
+    row.typeText:SetWidth(78)
+    row.typeText:SetPoint("LEFT", row, "LEFT", 146, 0)
+    row.typeText:SetJustifyH("LEFT")
+
+    row.targetText = row:CreateFontString(nil, "OVERLAY")
+    row.targetText:SetFont(FONT, FS, "")
+    row.targetText:SetWidth(130)
+    row.targetText:SetPoint("LEFT", row, "LEFT", 228, 0)
+    row.targetText:SetJustifyH("LEFT")
+
+    row.changeText = row:CreateFontString(nil, "OVERLAY")
+    row.changeText:SetFont(FONT, FS, "")
+    row.changeText:SetWidth(324)
+    row.changeText:SetPoint("LEFT", row, "LEFT", 362, 0)
+    row.changeText:SetJustifyH("LEFT")
+
+    row:SetScript("OnClick", function()
+      logSelectedIndex = this._index
+      UpdateLogRows()
+    end)
+    row:Hide()
+    table.insert(logRows, row)
+  end
+
+  logScrollUp = MakeBtn(f, "^", 16, 20)
+  logScrollUp:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -56)
+  logScrollUp:SetScript("OnClick", function()
+    logScrollOffset = logScrollOffset - 1
+    UpdateLogRows()
+  end)
+
+  logScrollDown = MakeBtn(f, "v", 16, 20)
+  logScrollDown:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -(56 + LOG_MAX_ROWS * LOG_ROW_H - 20))
+  logScrollDown:SetScript("OnClick", function()
+    logScrollOffset = logScrollOffset + 1
+    UpdateLogRows()
+  end)
+
+  local detailBg = CreateFrame("Frame", nil, f)
+  detailBg:SetWidth(LOG_W - 20)
+  detailBg:SetHeight(120)
+  detailBg:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 34)
+  MakeBackdrop(detailBg, 0.04, 0.04, 0.04, 0.75)
+
+  local detailTitle = detailBg:CreateFontString(nil, "OVERLAY")
+  detailTitle:SetFont(FONT, FS, "OUTLINE")
+  detailTitle:SetPoint("TOPLEFT", detailBg, "TOPLEFT", 8, -6)
+  detailTitle:SetTextColor(0.9, 0.75, 0.1, 1)
+  detailTitle:SetText("Details")
+
+  logDetailText = detailBg:CreateFontString(nil, "OVERLAY")
+  logDetailText:SetFont(FONT, FS, "")
+  logDetailText:SetPoint("TOPLEFT", detailBg, "TOPLEFT", 8, -24)
+  logDetailText:SetWidth(LOG_W - 36)
+  logDetailText:SetJustifyH("LEFT")
+  logDetailText:SetJustifyV("TOP")
+  logDetailText:SetText("|cFF888888Select a log entry to inspect details.|r")
+
+  local exportBtn = MakeBtn(f, "Export", 80, 20)
+  exportBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 10)
+  exportBtn:SetScript("OnClick", function() ShowExportWindow() end)
+
+  local clearBtn = MakeBtn(f, "Clear", 80, 20)
+  clearBtn:SetPoint("LEFT", exportBtn, "RIGHT", 6, 0)
+  clearBtn:SetScript("OnClick", function() StaticPopup_Show("BRP_CONFIRM_CLEAR_LOGS") end)
+
+  local refreshBtn = MakeBtn(f, "Refresh", 80, 20)
+  refreshBtn:SetPoint("LEFT", clearBtn, "RIGHT", 6, 0)
+  refreshBtn:SetScript("OnClick", function() UpdateLogRows() end)
+
+  local oldUpdate = UpdateLogRows
+  UpdateLogRows = function()
+    oldUpdate()
+    RefreshCount()
+  end
+
+  f:Hide()
+  return f
+end
+
 local function ApplyItemToFrames()
   if not st.item then return end
   local itemName, _, itemQuality, _, _, _, _, _, itemIcon = GetItemInfo(st.item)
@@ -1208,6 +1741,7 @@ evFrame:SetScript("OnEvent", function()
 
   if e == "ADDON_LOADED" then
     if arg1 ~= "BRPMaster" then return end
+    EnsureDB()
     -- Restore saved settings
     if not BRPMasterDB then BRPMasterDB = {} end
     if BRPMasterDB.activeTable     then st.activeTable      = BRPMasterDB.activeTable     end
@@ -1217,8 +1751,12 @@ evFrame:SetScript("OnEvent", function()
     -- Build UI
     mlFrame        = CreateMLFrame()
     playerMgrFrame = CreatePlayerMgrFrame()
+    logViewerFrame = CreateLogViewerFrame()
+    logExportFrame = CreateLogExportFrame()
     tinsert(UISpecialFrames, "BRPMasterMLFrame")
     tinsert(UISpecialFrames, "BRPMasterPMGRFrame")
+    tinsert(UISpecialFrames, "BRPMasterLogViewerFrame")
+    tinsert(UISpecialFrames, "BRPMasterLogExportFrame")
     CreateMinimapButton()
     -- Refresh cache after UI is built
     GuildRoster()
@@ -1326,9 +1864,10 @@ local function HandleSlash(msg)
       if name and amt then
         -- capitalize name
         name = string.upper(string.sub(name,1,1))..string.sub(name,2)
-        ModifyEP(name, tonumber(amt))
-        local sign = tonumber(amt) >= 0 and "+" or ""
-        Pr(name.." "..TABLE_EP_NAME.." DKP "..sign..amt)
+        if ApplyDKPChange(name, "EP", tonumber(amt), { reason = "Manual slash adjust" }) then
+          local sign = tonumber(amt) >= 0 and "+" or ""
+          Pr(name.." "..TABLE_EP_NAME.." DKP "..sign..amt)
+        end
       else
         Pr("Usage: /brp ep <amount>  or  /brp ep <name> <amount>")
       end
@@ -1346,9 +1885,10 @@ local function HandleSlash(msg)
       local _, _, name, amt = string.find(rest, "^(%S+)%s+(-?%d+)$")
       if name and amt then
         name = string.upper(string.sub(name,1,1))..string.sub(name,2)
-        ModifyGP(name, tonumber(amt))
-        local sign = tonumber(amt) >= 0 and "+" or ""
-        Pr(name.." "..TABLE_GP_NAME.." DKP "..sign..amt)
+        if ApplyDKPChange(name, "GP", tonumber(amt), { reason = "Manual slash adjust" }) then
+          local sign = tonumber(amt) >= 0 and "+" or ""
+          Pr(name.." "..TABLE_GP_NAME.." DKP "..sign..amt)
+        end
       else
         Pr("Usage: /brp gp <amount>  or  /brp gp <name> <amount>")
       end
@@ -1427,6 +1967,27 @@ local function HandleSlash(msg)
     return
   end
 
+  if msg == "log" then
+    if logViewerFrame then
+      if logViewerFrame:IsVisible() then logViewerFrame:Hide()
+      else
+        UpdateLogRows()
+        logViewerFrame:Show()
+      end
+    end
+    return
+  end
+
+  if msg == "log export" then
+    ShowExportWindow()
+    return
+  end
+
+  if msg == "log clear" then
+    StaticPopup_Show("BRP_CONFIRM_CLEAR_LOGS")
+    return
+  end
+
   -- /brp standings — dump DKP to chat
   if msg == "standings" then
     local list = {}
@@ -1448,6 +2009,9 @@ local function HandleSlash(msg)
 
   -- Help
   Pr("BRP Master commands:")
+  DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log|r                  - open DKP log viewer")
+  DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log export|r           - export DKP log")
+  DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log clear|r            - clear DKP log")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp|r                      — toggle loot window")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp table naxx|kara|r      — set active DKP table")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp ep <amt>|r             — award "..TABLE_EP_NAME.." DKP to raid")
@@ -1591,6 +2155,18 @@ function CreateMinimapButton()
           else
             UpdatePMGRRows()
             playerMgrFrame:Show()
+          end
+        end
+      end,
+    }, 1)
+    UIDropDownMenu_AddButton({
+      text="View DKP Log", notCheckable=1,
+      func=function()
+        if logViewerFrame then
+          if logViewerFrame:IsVisible() then logViewerFrame:Hide()
+          else
+            UpdateLogRows()
+            logViewerFrame:Show()
           end
         end
       end,
