@@ -75,6 +75,7 @@ local st = {
 local cache = {}
 local logViewerFrame
 local logExportFrame
+local standingsExportFrame
 local UpdateLogRows
 
 local function TableDisplayName(tableKey)
@@ -193,11 +194,25 @@ local function SerializeMeta(meta)
   return "{"..table.concat(parts, ",").."}"
 end
 
+local function GetGuildName()
+  if type(GetGuildInfo) == "function" then
+    local guildName = GetGuildInfo("player")
+    if guildName then return guildName end
+  end
+  return ""
+end
+
 local function ExportLogsAsJson()
   local logs = GetLogEntries()
   local lines = {"["}
   for i = 1, table.getn(logs) do
     local e = logs[i]
+    local tableSlot = nil
+    if e.tableKey == "EP" then
+      tableSlot = "DKP1"
+    elseif e.tableKey == "GP" then
+      tableSlot = "DKP2"
+    end
     local row = {
       string.format("\"id\":%d", e.id or 0),
       string.format("\"ts\":%d", e.ts or 0),
@@ -210,6 +225,7 @@ local function ExportLogsAsJson()
       string.format("\"reason\":%s", SerializeLogValue(e.reason)),
       string.format("\"tableKey\":%s", SerializeLogValue(e.tableKey)),
       string.format("\"tableName\":%s", SerializeLogValue(e.tableName)),
+      string.format("\"tableSlot\":%s", SerializeLogValue(tableSlot)),
       string.format("\"delta\":%s", SerializeLogValue(e.delta)),
       string.format("\"before\":%s", SerializeLogValue(e.before)),
       string.format("\"after\":%s", SerializeLogValue(e.after)),
@@ -219,6 +235,12 @@ local function ExportLogsAsJson()
       string.format("\"beforeGP\":%s", SerializeLogValue(e.beforeGP)),
       string.format("\"afterGP\":%s", SerializeLogValue(e.afterGP)),
       string.format("\"deltaGP\":%s", SerializeLogValue(e.deltaGP)),
+      string.format("\"beforeDKP1\":%s", SerializeLogValue(e.beforeEP)),
+      string.format("\"afterDKP1\":%s", SerializeLogValue(e.afterEP)),
+      string.format("\"deltaDKP1\":%s", SerializeLogValue(e.deltaEP)),
+      string.format("\"beforeDKP2\":%s", SerializeLogValue(e.beforeGP)),
+      string.format("\"afterDKP2\":%s", SerializeLogValue(e.afterGP)),
+      string.format("\"deltaDKP2\":%s", SerializeLogValue(e.deltaGP)),
       string.format("\"itemLink\":%s", SerializeLogValue(e.itemLink)),
       string.format("\"itemName\":%s", SerializeLogValue(e.itemName)),
       string.format("\"meta\":%s", SerializeMeta(e.meta)),
@@ -287,6 +309,71 @@ local function BuildCache(includeOffline)
 end
 
 -- ── EPGP modification ───────────────────────────────────────────────────────
+local function BuildStandingsList(includeOffline)
+  if includeOffline then
+    BuildCache(true)
+  end
+
+  local list = {}
+  for name, m in pairs(cache) do
+    table.insert(list, {
+      name = name,
+      class = m.class or "",
+      rank = m.rank or "",
+      rankIdx = m.rankIdx or 99,
+      ep = m.ep or 0,
+      gp = m.gp or 0,
+    })
+  end
+
+  table.sort(list, function(a, b)
+    if a.ep ~= b.ep then return a.ep > b.ep end
+    if a.gp ~= b.gp then return a.gp > b.gp end
+    return string.lower(a.name or "") < string.lower(b.name or "")
+  end)
+
+  return list
+end
+
+local function ExportStandingsAsJson()
+  local ts = time()
+  local list = BuildStandingsList(true)
+  local lines = {
+    "{",
+    string.format("  \"schemaVersion\":%d,", 1),
+    string.format("  \"exportedAt\":%d,", ts),
+    string.format("  \"exportedAtText\":%s,", SerializeLogValue(date("%Y-%m-%d %H:%M:%S", ts))),
+    string.format("  \"exportedBy\":%s,", SerializeLogValue(UnitName("player"))),
+    string.format("  \"guildName\":%s,", SerializeLogValue(GetGuildName())),
+    "  \"tableNames\":{",
+    string.format("    \"DKP1\":%s,", SerializeLogValue(TABLE_EP_NAME)),
+    string.format("    \"DKP2\":%s", SerializeLogValue(TABLE_GP_NAME)),
+    "  },",
+    "  \"members\":[",
+  }
+
+  for i = 1, table.getn(list) do
+    local m = list[i]
+    local suffix = (i < table.getn(list)) and "," or ""
+    table.insert(lines,
+      string.format(
+        "    {\"name\":%s,\"class\":%s,\"rank\":%s,\"rankIndex\":%s,\"dkp1\":%s,\"dkp2\":%s}%s",
+        SerializeLogValue(m.name),
+        SerializeLogValue(m.class),
+        SerializeLogValue(m.rank),
+        SerializeLogValue(m.rankIdx),
+        SerializeLogValue(m.ep),
+        SerializeLogValue(m.gp),
+        suffix
+      )
+    )
+  end
+
+  table.insert(lines, "  ]")
+  table.insert(lines, "}")
+  return table.concat(lines, "\n")
+end
+
 local function ApplyDKPChange(name, tableKey, delta, context)
   local m = cache[name]
   if not m then
@@ -1305,6 +1392,7 @@ local logDetailText
 local logScrollUp
 local logScrollDown
 local exportEditBox
+local standingsExportEditBox
 
 local LOG_W = 760
 local LOG_H = 420
@@ -1406,6 +1494,14 @@ local function ShowExportWindow()
   exportEditBox:HighlightText()
 end
 
+local function ShowStandingsExportWindow()
+  if not standingsExportFrame or not standingsExportEditBox then return end
+  standingsExportEditBox:SetText(ExportStandingsAsJson())
+  standingsExportFrame:Show()
+  standingsExportEditBox:SetFocus()
+  standingsExportEditBox:HighlightText()
+end
+
 local function CreateLogExportFrame()
   local f = CreateFrame("Frame", "BRPMasterLogExportFrame", UIParent)
   f:SetWidth(680)
@@ -1455,6 +1551,61 @@ local function CreateLogExportFrame()
     exportEditBox:SetText(ExportLogsAsJson())
     exportEditBox:SetFocus()
     exportEditBox:HighlightText()
+  end)
+
+  f:Hide()
+  return f
+end
+
+local function CreateStandingsExportFrame()
+  local f = CreateFrame("Frame", "BRPMasterStandingsExportFrame", UIParent)
+  f:SetWidth(680)
+  f:SetHeight(440)
+  f:SetPoint("CENTER", UIParent, "CENTER", -60, 0)
+  f:SetFrameStrata("DIALOG")
+  MakeBackdrop(f, 0, 0, 0, 0.95)
+  f:SetMovable(true)
+  f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function() f:StartMoving() end)
+  f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+  MakeCloseBtn(f, nil)
+
+  local title = f:CreateFontString(nil, "OVERLAY")
+  title:SetFont(FONT, 13, "OUTLINE")
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -8)
+  title:SetTextColor(1, 0.84, 0, 1)
+  title:SetText("DKP Standings Export")
+
+  local hint = f:CreateFontString(nil, "OVERLAY")
+  hint:SetFont(FONT, FS, "")
+  hint:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -28)
+  hint:SetWidth(620)
+  hint:SetJustifyH("LEFT")
+  hint:SetText("|cFFAAAAAAExport the full current guild standings as JSON for BRPHUB upload.|r")
+
+  local scroll = CreateFrame("ScrollFrame", "BRPMasterStandingsExportScroll", f, "UIPanelScrollFrameTemplate")
+  scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -48)
+  scroll:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -28, 40)
+
+  local eb = CreateFrame("EditBox", "BRPMasterStandingsExportEditBox", scroll)
+  eb:SetFont(FONT_MONO, FS, "")
+  eb:SetWidth(620)
+  eb:SetHeight(4000)
+  eb:SetMultiLine(true)
+  eb:SetAutoFocus(false)
+  eb:SetJustifyH("LEFT")
+  eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
+  eb:SetScript("OnTextChanged", function() scroll:UpdateScrollChildRect() end)
+  scroll:SetScrollChild(eb)
+  standingsExportEditBox = eb
+
+  local refreshBtn = MakeBtn(f, "Refresh", 80, 20)
+  refreshBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 10)
+  refreshBtn:SetScript("OnClick", function()
+    standingsExportEditBox:SetText(ExportStandingsAsJson())
+    standingsExportEditBox:SetFocus()
+    standingsExportEditBox:HighlightText()
   end)
 
   f:Hide()
@@ -1753,10 +1904,12 @@ evFrame:SetScript("OnEvent", function()
     playerMgrFrame = CreatePlayerMgrFrame()
     logViewerFrame = CreateLogViewerFrame()
     logExportFrame = CreateLogExportFrame()
+    standingsExportFrame = CreateStandingsExportFrame()
     tinsert(UISpecialFrames, "BRPMasterMLFrame")
     tinsert(UISpecialFrames, "BRPMasterPMGRFrame")
     tinsert(UISpecialFrames, "BRPMasterLogViewerFrame")
     tinsert(UISpecialFrames, "BRPMasterLogExportFrame")
+    tinsert(UISpecialFrames, "BRPMasterStandingsExportFrame")
     CreateMinimapButton()
     -- Refresh cache after UI is built
     GuildRoster()
@@ -1983,6 +2136,11 @@ local function HandleSlash(msg)
     return
   end
 
+  if msg == "standings export" then
+    ShowStandingsExportWindow()
+    return
+  end
+
   if msg == "log clear" then
     StaticPopup_Show("BRP_CONFIRM_CLEAR_LOGS")
     return
@@ -1990,12 +2148,7 @@ local function HandleSlash(msg)
 
   -- /brp standings — dump DKP to chat
   if msg == "standings" then
-    local list = {}
-    for name, m in pairs(cache) do
-      table.insert(list, m)
-      list[table.getn(list)].name = name
-    end
-    table.sort(list, function(a,b) return a.ep > b.ep end)
+    local list = BuildStandingsList()
     Pr("=== DKP Standings (by "..TABLE_EP_NAME.." DKP) ===")
     for _, m in ipairs(list) do
       if m.ep > 0 or m.gp > 0 then
@@ -2012,6 +2165,7 @@ local function HandleSlash(msg)
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log|r                  - open DKP log viewer")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log export|r           - export DKP log")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log clear|r            - clear DKP log")
+  DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp standings export|r     - export standings JSON")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp|r                      — toggle loot window")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp table naxx|kara|r      — set active DKP table")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp ep <amt>|r             — award "..TABLE_EP_NAME.." DKP to raid")
@@ -2181,8 +2335,8 @@ function CreateMinimapButton()
       text="Announce Channel", hasArrow=true, value="CHANNEL", notCheckable=1,
     }, 1)
     UIDropDownMenu_AddButton({
-      text="Standings to Chat", notCheckable=1,
-      func=function() HandleSlash("standings") end,
+      text="Export Standings", notCheckable=1,
+      func=function() HandleSlash("standings export") end,
     }, 1)
     UIDropDownMenu_AddButton({
       text="Refresh Cache", notCheckable=1,
