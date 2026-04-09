@@ -123,6 +123,9 @@ local function EnsureDB()
   BRPMasterDB = BRPMasterDB or {}
   BRPMasterDB.logs = BRPMasterDB.logs or {}
   BRPMasterDB.logMeta = BRPMasterDB.logMeta or {}
+  BRPMasterDB.raidAwardDefaults = BRPMasterDB.raidAwardDefaults or {}
+  if not BRPMasterDB.raidAwardDefaults.EP then BRPMasterDB.raidAwardDefaults.EP = 10 end
+  if not BRPMasterDB.raidAwardDefaults.GP then BRPMasterDB.raidAwardDefaults.GP = 10 end
   if not BRPMasterDB.logMeta.nextId or BRPMasterDB.logMeta.nextId < 1 then
     BRPMasterDB.logMeta.nextId = 1
   end
@@ -202,8 +205,9 @@ local function GetGuildName()
   return ""
 end
 
-local function ExportLogsAsJson()
+local function ExportLogsAsJson(pretty)
   local logs = GetLogEntries()
+  local total = table.getn(logs)
   local lines = {"["}
   for i = 1, table.getn(logs) do
     local e = logs[i]
@@ -245,11 +249,18 @@ local function ExportLogsAsJson()
       string.format("\"itemName\":%s", SerializeLogValue(e.itemName)),
       string.format("\"meta\":%s", SerializeMeta(e.meta)),
     }
-    local suffix = (i < table.getn(logs)) and "," or ""
-    table.insert(lines, "  {"..table.concat(row, ",").."}"..suffix)
+    local suffix = (i < total) and "," or ""
+    if pretty then
+      table.insert(lines, "  {"..table.concat(row, ",").."}"..suffix)
+    else
+      table.insert(lines, "{"..table.concat(row, ",").."}"..suffix)
+    end
   end
   table.insert(lines, "]")
-  return table.concat(lines, "\n")
+  if pretty then
+    return table.concat(lines, "\n")
+  end
+  return table.concat(lines, "")
 end
 
 -- ── EPGP — note I/O ─────────────────────────────────────────────────────────
@@ -335,43 +346,82 @@ local function BuildStandingsList(includeOffline)
   return list
 end
 
-local function ExportStandingsAsJson()
+local function ExportStandingsAsJson(pretty)
   local ts = time()
   local list = BuildStandingsList(true)
-  local lines = {
-    "{",
-    string.format("  \"schemaVersion\":%d,", 1),
-    string.format("  \"exportedAt\":%d,", ts),
-    string.format("  \"exportedAtText\":%s,", SerializeLogValue(date("%Y-%m-%d %H:%M:%S", ts))),
-    string.format("  \"exportedBy\":%s,", SerializeLogValue(UnitName("player"))),
-    string.format("  \"guildName\":%s,", SerializeLogValue(GetGuildName())),
-    "  \"tableNames\":{",
-    string.format("    \"DKP1\":%s,", SerializeLogValue(TABLE_EP_NAME)),
-    string.format("    \"DKP2\":%s", SerializeLogValue(TABLE_GP_NAME)),
-    "  },",
-    "  \"members\":[",
-  }
+  local lines
+  if pretty then
+    lines = {
+      "{",
+      string.format("  \"schemaVersion\":%d,", 1),
+      string.format("  \"exportedAt\":%d,", ts),
+      string.format("  \"exportedAtText\":%s,", SerializeLogValue(date("%Y-%m-%d %H:%M:%S", ts))),
+      string.format("  \"exportedBy\":%s,", SerializeLogValue(UnitName("player"))),
+      string.format("  \"guildName\":%s,", SerializeLogValue(GetGuildName())),
+      "  \"tableNames\":{",
+      string.format("    \"DKP1\":%s,", SerializeLogValue(TABLE_EP_NAME)),
+      string.format("    \"DKP2\":%s", SerializeLogValue(TABLE_GP_NAME)),
+      "  },",
+      "  \"members\":[",
+    }
+  else
+    lines = {
+      "{",
+      string.format("\"schemaVersion\":%d,", 1),
+      string.format("\"exportedAt\":%d,", ts),
+      string.format("\"exportedAtText\":%s,", SerializeLogValue(date("%Y-%m-%d %H:%M:%S", ts))),
+      string.format("\"exportedBy\":%s,", SerializeLogValue(UnitName("player"))),
+      string.format("\"guildName\":%s,", SerializeLogValue(GetGuildName())),
+      "\"tableNames\":{",
+      string.format("\"DKP1\":%s,", SerializeLogValue(TABLE_EP_NAME)),
+      string.format("\"DKP2\":%s", SerializeLogValue(TABLE_GP_NAME)),
+      "},",
+      "\"members\":[",
+    }
+  end
 
   for i = 1, table.getn(list) do
     local m = list[i]
     local suffix = (i < table.getn(list)) and "," or ""
-    table.insert(lines,
-      string.format(
-        "    {\"name\":%s,\"class\":%s,\"rank\":%s,\"rankIndex\":%s,\"dkp1\":%s,\"dkp2\":%s}%s",
-        SerializeLogValue(m.name),
-        SerializeLogValue(m.class),
-        SerializeLogValue(m.rank),
-        SerializeLogValue(m.rankIdx),
-        SerializeLogValue(m.ep),
-        SerializeLogValue(m.gp),
-        suffix
+    if pretty then
+      table.insert(lines,
+        string.format(
+          "    {\"name\":%s,\"class\":%s,\"rank\":%s,\"rankIndex\":%s,\"dkp1\":%s,\"dkp2\":%s}%s",
+          SerializeLogValue(m.name),
+          SerializeLogValue(m.class),
+          SerializeLogValue(m.rank),
+          SerializeLogValue(m.rankIdx),
+          SerializeLogValue(m.ep),
+          SerializeLogValue(m.gp),
+          suffix
+        )
       )
-    )
+    else
+      table.insert(lines,
+        string.format(
+          "{\"name\":%s,\"class\":%s,\"rank\":%s,\"rankIndex\":%s,\"dkp1\":%s,\"dkp2\":%s}%s",
+          SerializeLogValue(m.name),
+          SerializeLogValue(m.class),
+          SerializeLogValue(m.rank),
+          SerializeLogValue(m.rankIdx),
+          SerializeLogValue(m.ep),
+          SerializeLogValue(m.gp),
+          suffix
+        )
+      )
+    end
   end
 
-  table.insert(lines, "  ]")
+  if pretty then
+    table.insert(lines, "  ]")
+  else
+    table.insert(lines, "]")
+  end
   table.insert(lines, "}")
-  return table.concat(lines, "\n")
+  if pretty then
+    return table.concat(lines, "\n")
+  end
+  return table.concat(lines, "")
 end
 
 local function ApplyDKPChange(name, tableKey, delta, context)
@@ -576,6 +626,28 @@ local function PopupGetText(dlg)
   return eb and eb:GetText() or ""
 end
 
+local function GetRaidAwardDefault(tableKey)
+  EnsureDB()
+  local v = BRPMasterDB.raidAwardDefaults and BRPMasterDB.raidAwardDefaults[tableKey]
+  if type(v) ~= "number" then return 10 end
+  return v
+end
+
+local function SetRaidAwardDefault(tableKey, amount)
+  if type(amount) ~= "number" then return end
+  EnsureDB()
+  BRPMasterDB.raidAwardDefaults[tableKey] = amount
+end
+
+local function SetPopupEditBoxValue(popupFrame, value)
+  if not popupFrame then return end
+  local eb = getglobal((popupFrame:GetName() or "").."EditBox")
+  if not eb then return end
+  eb:SetText(tostring(value))
+  eb:SetFocus()
+  eb:HighlightText()
+end
+
 -- Static popup for award confirmation
 StaticPopupDialogs["BRP_CONFIRM_AWARD"] = {
   text = "Confirm award?",
@@ -613,13 +685,22 @@ StaticPopupDialogs["BRP_EP_RAID"] = {
   text = "Award "..TABLE_EP_NAME.." DKP to raid:\n(enter amount)",
   button1 = "Award", button2 = "Cancel",
   hasEditBox = true,
+  OnShow = function()
+    SetPopupEditBoxValue(this, GetRaidAwardDefault("EP"))
+  end,
   OnAccept = function()
     local amt = tonumber(PopupGetText(this))
-    if amt and amt ~= 0 then AwardRaidEP(amt, "EP") end
+    if amt and amt ~= 0 then
+      SetRaidAwardDefault("EP", amt)
+      AwardRaidEP(amt, "EP")
+    end
   end,
   EditBoxOnEnterPressed = function()
     local amt = tonumber(this:GetText())
-    if amt and amt ~= 0 then AwardRaidEP(amt, "EP") end
+    if amt and amt ~= 0 then
+      SetRaidAwardDefault("EP", amt)
+      AwardRaidEP(amt, "EP")
+    end
     StaticPopup_Hide("BRP_EP_RAID")
   end,
   timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
@@ -629,13 +710,22 @@ StaticPopupDialogs["BRP_GP_RAID"] = {
   text = "Award "..TABLE_GP_NAME.." DKP to raid:\n(enter amount)",
   button1 = "Award", button2 = "Cancel",
   hasEditBox = true,
+  OnShow = function()
+    SetPopupEditBoxValue(this, GetRaidAwardDefault("GP"))
+  end,
   OnAccept = function()
     local amt = tonumber(PopupGetText(this))
-    if amt and amt ~= 0 then AwardRaidEP(amt, "GP") end
+    if amt and amt ~= 0 then
+      SetRaidAwardDefault("GP", amt)
+      AwardRaidEP(amt, "GP")
+    end
   end,
   EditBoxOnEnterPressed = function()
     local amt = tonumber(this:GetText())
-    if amt and amt ~= 0 then AwardRaidEP(amt, "GP") end
+    if amt and amt ~= 0 then
+      SetRaidAwardDefault("GP", amt)
+      AwardRaidEP(amt, "GP")
+    end
     StaticPopup_Hide("BRP_GP_RAID")
   end,
   timeout = 0, whileDead = true, hideOnEscape = true, preferredIndex = 3,
@@ -1393,6 +1483,12 @@ local logScrollUp
 local logScrollDown
 local exportEditBox
 local standingsExportEditBox
+local logExportPartText
+local standingsExportPartText
+
+local EXPORT_CHUNK_CHARS = 25000
+local logExportState = { fullText = "", chunks = {""}, index = 1 }
+local standingsExportState = { fullText = "", chunks = {""}, index = 1 }
 
 local LOG_W = 760
 local LOG_H = 420
@@ -1486,20 +1582,128 @@ UpdateLogRows = function()
   end
 end
 
+local function BuildExportChunks(text, maxChars)
+  text = text or ""
+  if text == "" then
+    return {""}
+  end
+  if not maxChars or maxChars < 1000 then
+    maxChars = EXPORT_CHUNK_CHARS
+  end
+
+  local chunks = {}
+  local textLen = string.len(text)
+  local i = 1
+  while i <= textLen do
+    local j = i + maxChars - 1
+    if j > textLen then j = textLen end
+    table.insert(chunks, string.sub(text, i, j))
+    i = j + 1
+  end
+
+  if table.getn(chunks) == 0 then
+    table.insert(chunks, "")
+  end
+  return chunks
+end
+
+local function PrepareExportState(state, text)
+  state.fullText = text or ""
+  state.chunks = BuildExportChunks(state.fullText, EXPORT_CHUNK_CHARS)
+  state.index = 1
+end
+
+local function ClampExportStateIndex(state)
+  local total = table.getn(state.chunks or {})
+  if total < 1 then
+    state.chunks = {""}
+    total = 1
+  end
+  if state.index < 1 then state.index = 1 end
+  if state.index > total then state.index = total end
+  return total
+end
+
+local function RefreshExportEditBox(state, eb, partText)
+  local total = ClampExportStateIndex(state)
+  local chunk = state.chunks[state.index] or ""
+  eb:SetText(chunk)
+  local parent = eb:GetParent()
+  if parent and parent.UpdateScrollChildRect then
+    parent:UpdateScrollChildRect()
+  end
+  eb:SetCursorPosition(0)
+  eb:SetFocus()
+  if partText then
+    partText:SetText(string.format("|cFFAAAAAAPart %d/%d|r  |cFF777777(chunk %d chars, total %d)|r",
+      state.index, total, string.len(chunk), string.len(state.fullText or "")))
+  end
+end
+
+local function ShiftStep()
+  if IsShiftKeyDown and IsShiftKeyDown() then
+    return 5
+  end
+  return 1
+end
+
+local function StepExportPart(state, delta, eb, partText)
+  state.index = state.index + delta
+  RefreshExportEditBox(state, eb, partText)
+end
+
 local function ShowExportWindow()
   if not logExportFrame or not exportEditBox then return end
-  exportEditBox:SetText(ExportLogsAsJson())
+  PrepareExportState(logExportState, ExportLogsAsJson())
   logExportFrame:Show()
-  exportEditBox:SetFocus()
-  exportEditBox:HighlightText()
+  RefreshExportEditBox(logExportState, exportEditBox, logExportPartText)
+  if table.getn(logExportState.chunks) > 1 then
+    Pr(string.format("Large export split into %d parts. Copy parts in order and concatenate as one JSON.", table.getn(logExportState.chunks)))
+  end
 end
 
 local function ShowStandingsExportWindow()
   if not standingsExportFrame or not standingsExportEditBox then return end
-  standingsExportEditBox:SetText(ExportStandingsAsJson())
+  PrepareExportState(standingsExportState, ExportStandingsAsJson())
   standingsExportFrame:Show()
-  standingsExportEditBox:SetFocus()
-  standingsExportEditBox:HighlightText()
+  RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
+  if table.getn(standingsExportState.chunks) > 1 then
+    Pr(string.format("Large export split into %d parts. Copy parts in order and concatenate as one JSON.", table.getn(standingsExportState.chunks)))
+  end
+end
+
+local function SaveExportSnapshot(key, payload, entryCount)
+  EnsureDB()
+  if type(BRPMasterExportDB) ~= "table" then
+    BRPMasterExportDB = {}
+  end
+  BRPMasterExportDB[key] = {
+    schemaVersion = 1,
+    exportedAt = time(),
+    exportedAtText = date("%Y-%m-%d %H:%M:%S"),
+    exportedBy = UnitName("player"),
+    guildName = GetGuildName(),
+    entries = entryCount or 0,
+    payload = payload or "",
+  }
+end
+
+local function SaveLogsExportToSavedVariables()
+  local logs = GetLogEntries()
+  local payload = ExportLogsAsJson()
+  SaveExportSnapshot("logs", payload, table.getn(logs))
+  Pr("Log export snapshot saved to separate file.")
+  Pr("Type /reload or relog, then open: WTF\\Account\\<ACCOUNT>\\SavedVariables\\BRPMasterExport.lua")
+  Pr("Use BRPMasterExportDB.logs.payload as the JSON for your site upload.")
+end
+
+local function SaveStandingsExportToSavedVariables()
+  local list = BuildStandingsList(true)
+  local payload = ExportStandingsAsJson()
+  SaveExportSnapshot("standings", payload, table.getn(list))
+  Pr("Standings export snapshot saved to separate file.")
+  Pr("Type /reload or relog, then open: WTF\\Account\\<ACCOUNT>\\SavedVariables\\BRPMasterExport.lua")
+  Pr("Use BRPMasterExportDB.standings.payload as the JSON for your site upload.")
 end
 
 local function CreateLogExportFrame()
@@ -1527,7 +1731,14 @@ local function CreateLogExportFrame()
   hint:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -28)
   hint:SetWidth(620)
   hint:SetJustifyH("LEFT")
-  hint:SetText("|cFFAAAAAAExport all current log entries for later upload.|r")
+  hint:SetText("|cFFAAAAAAExport log JSON in safe parts. Use Ctrl+A, then Ctrl+C for each part.|r")
+
+  local part = f:CreateFontString(nil, "OVERLAY")
+  part:SetFont(FONT, FS, "")
+  part:SetPoint("TOPRIGHT", f, "TOPRIGHT", -28, -28)
+  part:SetJustifyH("RIGHT")
+  part:SetText("|cFF777777Part 1/1|r")
+  logExportPartText = part
 
   local scroll = CreateFrame("ScrollFrame", "BRPMasterLogExportScroll", f, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -48)
@@ -1541,16 +1752,46 @@ local function CreateLogExportFrame()
   eb:SetAutoFocus(false)
   eb:SetJustifyH("LEFT")
   eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
-  eb:SetScript("OnTextChanged", function() scroll:UpdateScrollChildRect() end)
   scroll:SetScrollChild(eb)
   exportEditBox = eb
 
+  local prevBtn = MakeBtn(f, "<", 28, 20)
+  prevBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 42, 10)
+  prevBtn:SetScript("OnClick", function()
+    StepExportPart(logExportState, -ShiftStep(), exportEditBox, logExportPartText)
+  end)
+
+  local nextBtn = MakeBtn(f, ">", 28, 20)
+  nextBtn:SetPoint("LEFT", prevBtn, "RIGHT", 4, 0)
+  nextBtn:SetScript("OnClick", function()
+    StepExportPart(logExportState, ShiftStep(), exportEditBox, logExportPartText)
+  end)
+
+  local firstBtn = MakeBtn(f, "<<", 28, 20)
+  firstBtn:SetPoint("RIGHT", prevBtn, "LEFT", -4, 0)
+  firstBtn:SetScript("OnClick", function()
+    logExportState.index = 1
+    RefreshExportEditBox(logExportState, exportEditBox, logExportPartText)
+  end)
+
+  local lastBtn = MakeBtn(f, ">>", 28, 20)
+  lastBtn:SetPoint("LEFT", nextBtn, "RIGHT", 4, 0)
+  lastBtn:SetScript("OnClick", function()
+    logExportState.index = table.getn(logExportState.chunks)
+    RefreshExportEditBox(logExportState, exportEditBox, logExportPartText)
+  end)
+
   local refreshBtn = MakeBtn(f, "Refresh", 80, 20)
-  refreshBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 10)
+  refreshBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0)
   refreshBtn:SetScript("OnClick", function()
-    exportEditBox:SetText(ExportLogsAsJson())
-    exportEditBox:SetFocus()
-    exportEditBox:HighlightText()
+    PrepareExportState(logExportState, ExportLogsAsJson())
+    RefreshExportEditBox(logExportState, exportEditBox, logExportPartText)
+  end)
+
+  local saveBtn = MakeBtn(f, "Save to File", 110, 20)
+  saveBtn:SetPoint("LEFT", refreshBtn, "RIGHT", 6, 0)
+  saveBtn:SetScript("OnClick", function()
+    SaveLogsExportToSavedVariables()
   end)
 
   f:Hide()
@@ -1582,7 +1823,14 @@ local function CreateStandingsExportFrame()
   hint:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -28)
   hint:SetWidth(620)
   hint:SetJustifyH("LEFT")
-  hint:SetText("|cFFAAAAAAExport the full current guild standings as JSON for BRPHUB upload.|r")
+  hint:SetText("|cFFAAAAAAExport standings JSON in safe parts. Use Ctrl+A, then Ctrl+C for each part.|r")
+
+  local part = f:CreateFontString(nil, "OVERLAY")
+  part:SetFont(FONT, FS, "")
+  part:SetPoint("TOPRIGHT", f, "TOPRIGHT", -28, -28)
+  part:SetJustifyH("RIGHT")
+  part:SetText("|cFF777777Part 1/1|r")
+  standingsExportPartText = part
 
   local scroll = CreateFrame("ScrollFrame", "BRPMasterStandingsExportScroll", f, "UIPanelScrollFrameTemplate")
   scroll:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -48)
@@ -1596,16 +1844,46 @@ local function CreateStandingsExportFrame()
   eb:SetAutoFocus(false)
   eb:SetJustifyH("LEFT")
   eb:SetScript("OnEscapePressed", function() eb:ClearFocus() end)
-  eb:SetScript("OnTextChanged", function() scroll:UpdateScrollChildRect() end)
   scroll:SetScrollChild(eb)
   standingsExportEditBox = eb
 
+  local prevBtn = MakeBtn(f, "<", 28, 20)
+  prevBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 42, 10)
+  prevBtn:SetScript("OnClick", function()
+    StepExportPart(standingsExportState, -ShiftStep(), standingsExportEditBox, standingsExportPartText)
+  end)
+
+  local nextBtn = MakeBtn(f, ">", 28, 20)
+  nextBtn:SetPoint("LEFT", prevBtn, "RIGHT", 4, 0)
+  nextBtn:SetScript("OnClick", function()
+    StepExportPart(standingsExportState, ShiftStep(), standingsExportEditBox, standingsExportPartText)
+  end)
+
+  local firstBtn = MakeBtn(f, "<<", 28, 20)
+  firstBtn:SetPoint("RIGHT", prevBtn, "LEFT", -4, 0)
+  firstBtn:SetScript("OnClick", function()
+    standingsExportState.index = 1
+    RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
+  end)
+
+  local lastBtn = MakeBtn(f, ">>", 28, 20)
+  lastBtn:SetPoint("LEFT", nextBtn, "RIGHT", 4, 0)
+  lastBtn:SetScript("OnClick", function()
+    standingsExportState.index = table.getn(standingsExportState.chunks)
+    RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
+  end)
+
   local refreshBtn = MakeBtn(f, "Refresh", 80, 20)
-  refreshBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 10, 10)
+  refreshBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0)
   refreshBtn:SetScript("OnClick", function()
-    standingsExportEditBox:SetText(ExportStandingsAsJson())
-    standingsExportEditBox:SetFocus()
-    standingsExportEditBox:HighlightText()
+    PrepareExportState(standingsExportState, ExportStandingsAsJson())
+    RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
+  end)
+
+  local saveBtn = MakeBtn(f, "Save to File", 110, 20)
+  saveBtn:SetPoint("LEFT", refreshBtn, "RIGHT", 6, 0)
+  saveBtn:SetScript("OnClick", function()
+    SaveStandingsExportToSavedVariables()
   end)
 
   f:Hide()
@@ -1620,8 +1898,9 @@ StaticPopupDialogs["BRP_CONFIRM_CLEAR_LOGS"] = {
     EnsureDB()
     BRPMasterDB.logs = {}
     logSelectedIndex = nil
+    logExportState = { fullText = "", chunks = {""}, index = 1 }
     if logExportFrame and logExportFrame:IsVisible() and exportEditBox then
-      exportEditBox:SetText("")
+      RefreshExportEditBox(logExportState, exportEditBox, logExportPartText)
     end
     if UpdateLogRows then UpdateLogRows() end
     Pr("DKP log cleared.")
@@ -2136,8 +2415,18 @@ local function HandleSlash(msg)
     return
   end
 
+  if msg == "log save" then
+    SaveLogsExportToSavedVariables()
+    return
+  end
+
   if msg == "standings export" then
     ShowStandingsExportWindow()
+    return
+  end
+
+  if msg == "standings save" then
+    SaveStandingsExportToSavedVariables()
     return
   end
 
@@ -2164,8 +2453,10 @@ local function HandleSlash(msg)
   Pr("BRP Master commands:")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log|r                  - open DKP log viewer")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log export|r           - export DKP log")
+  DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log save|r             - save full log JSON to SavedVariables")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp log clear|r            - clear DKP log")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp standings export|r     - export standings JSON")
+  DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp standings save|r       - save standings JSON to SavedVariables")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp|r                      — toggle loot window")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp table naxx|kara|r      — set active DKP table")
   DEFAULT_CHAT_FRAME:AddMessage("  |cFFFFD100/brp ep <amt>|r             — award "..TABLE_EP_NAME.." DKP to raid")

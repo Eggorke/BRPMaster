@@ -44,6 +44,22 @@ local TABLE_GP_NAME = "AQ40"   -- rename to any label, e.g. "GP" or "RAID2"
 
 EP/GP values are stored in guild member **officer notes** in the format `{EP:GP}`, for example `{150:200}`. Existing note text is preserved.
 
+### BRPMasterExport (Companion Addon)
+
+For full JSON export in one piece (without in-game chunk copying), use:
+
+- https://github.com/Eggorke/BRPMasterExport
+
+Purpose:
+
+- keeps export payloads separate from the main `BRPMasterDB`
+- allows generating full JSON from inside the game via `/brp log save` and `/brp standings save`
+
+Storage path:
+
+- `WTF/Account/<ACCOUNT>/SavedVariables/BRPMasterExport.lua`
+- JSON fields: `BRPMasterExportDB.logs.payload` and `BRPMasterExportDB.standings.payload`
+
 ### Slash Commands
 
 | Command | Description |
