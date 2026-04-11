@@ -1640,6 +1640,20 @@ local function RefreshExportEditBox(state, eb, partText)
   end
 end
 
+local function RefreshStandingsExportEditBox()
+  if not standingsExportEditBox then return end
+  standingsExportEditBox:SetText(standingsExportState.fullText or "")
+  local parent = standingsExportEditBox:GetParent()
+  if parent and parent.UpdateScrollChildRect then
+    parent:UpdateScrollChildRect()
+  end
+  standingsExportEditBox:SetCursorPosition(0)
+  standingsExportEditBox:SetFocus()
+  if standingsExportPartText then
+    standingsExportPartText:SetText("|cFF777777Full export|r")
+  end
+end
+
 local function ShiftStep()
   if IsShiftKeyDown and IsShiftKeyDown() then
     return 5
@@ -1664,12 +1678,9 @@ end
 
 local function ShowStandingsExportWindow()
   if not standingsExportFrame or not standingsExportEditBox then return end
-  PrepareExportState(standingsExportState, ExportStandingsAsJson())
+  standingsExportState.fullText = ExportStandingsAsJson()
   standingsExportFrame:Show()
-  RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
-  if table.getn(standingsExportState.chunks) > 1 then
-    Pr(string.format("Large export split into %d parts. Copy parts in order and concatenate as one JSON.", table.getn(standingsExportState.chunks)))
-  end
+  RefreshStandingsExportEditBox()
 end
 
 local function SaveExportSnapshot(key, payload, entryCount)
@@ -1823,13 +1834,13 @@ local function CreateStandingsExportFrame()
   hint:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -28)
   hint:SetWidth(620)
   hint:SetJustifyH("LEFT")
-  hint:SetText("|cFFAAAAAAExport standings JSON in safe parts. Use Ctrl+A, then Ctrl+C for each part.|r")
+  hint:SetText("|cFFAAAAAAExport standings JSON in one piece. Use Ctrl+A, then Ctrl+C.|r")
 
   local part = f:CreateFontString(nil, "OVERLAY")
   part:SetFont(FONT, FS, "")
   part:SetPoint("TOPRIGHT", f, "TOPRIGHT", -28, -28)
   part:SetJustifyH("RIGHT")
-  part:SetText("|cFF777777Part 1/1|r")
+  part:SetText("|cFF777777Full export|r")
   standingsExportPartText = part
 
   local scroll = CreateFrame("ScrollFrame", "BRPMasterStandingsExportScroll", f, "UIPanelScrollFrameTemplate")
@@ -1847,37 +1858,11 @@ local function CreateStandingsExportFrame()
   scroll:SetScrollChild(eb)
   standingsExportEditBox = eb
 
-  local prevBtn = MakeBtn(f, "<", 28, 20)
-  prevBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 42, 10)
-  prevBtn:SetScript("OnClick", function()
-    StepExportPart(standingsExportState, -ShiftStep(), standingsExportEditBox, standingsExportPartText)
-  end)
-
-  local nextBtn = MakeBtn(f, ">", 28, 20)
-  nextBtn:SetPoint("LEFT", prevBtn, "RIGHT", 4, 0)
-  nextBtn:SetScript("OnClick", function()
-    StepExportPart(standingsExportState, ShiftStep(), standingsExportEditBox, standingsExportPartText)
-  end)
-
-  local firstBtn = MakeBtn(f, "<<", 28, 20)
-  firstBtn:SetPoint("RIGHT", prevBtn, "LEFT", -4, 0)
-  firstBtn:SetScript("OnClick", function()
-    standingsExportState.index = 1
-    RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
-  end)
-
-  local lastBtn = MakeBtn(f, ">>", 28, 20)
-  lastBtn:SetPoint("LEFT", nextBtn, "RIGHT", 4, 0)
-  lastBtn:SetScript("OnClick", function()
-    standingsExportState.index = table.getn(standingsExportState.chunks)
-    RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
-  end)
-
   local refreshBtn = MakeBtn(f, "Refresh", 80, 20)
-  refreshBtn:SetPoint("LEFT", lastBtn, "RIGHT", 8, 0)
+  refreshBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 42, 10)
   refreshBtn:SetScript("OnClick", function()
-    PrepareExportState(standingsExportState, ExportStandingsAsJson())
-    RefreshExportEditBox(standingsExportState, standingsExportEditBox, standingsExportPartText)
+    standingsExportState.fullText = ExportStandingsAsJson()
+    RefreshStandingsExportEditBox()
   end)
 
   local saveBtn = MakeBtn(f, "Save to File", 110, 20)
